@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run the Expo -> Dev.to cross-posting script
-# Scheduled: Tuesdays and Thursdays at 12:00 PM PT
+# Scheduled: Daily at 12:00 PM PT
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/crosspost.log"
