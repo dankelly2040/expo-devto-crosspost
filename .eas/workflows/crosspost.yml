@@ -1,0 +1,24 @@
+name: Cross-post Expo blog to Dev.to
+
+on:
+  schedule:
+    - cron: "0 19 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  crosspost:
+    runs_on: linux-medium
+    environment: production
+    steps:
+      - name: Install dependencies
+        run: pip install anthropic
+
+      - name: Run cross-post script
+        run: python3 crosspost.py
+
+      - name: Persist state
+        run: |
+          git config user.name "eas-workflows[bot]"
+          git config user.email "eas-workflows[bot]@users.noreply.github.com"
+          git add posted.json
+          git diff --cached --quiet || git commit -m "Update posted.json state" && git push
