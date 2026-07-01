@@ -706,7 +706,7 @@ def publish_to_devto(title, markdown, description, tags, cover_image=None,
         article_data["article"]["canonical_url"] = canonical_url
 
     if cover_image:
-        article_data["article"]["main_image"] = cover_image
+        article_data["article"]["cover_image"] = cover_image
 
     if DEVTO_ORG_ID:
         article_data["article"]["organization_id"] = int(DEVTO_ORG_ID)

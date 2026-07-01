@@ -10,6 +10,8 @@ jobs:
     runs_on: linux-medium
     environment: production
     steps:
+      - uses: eas/checkout@v1
+
       - name: Install dependencies
         run: pip install anthropic
 
@@ -21,4 +23,4 @@ jobs:
           git config user.name "eas-workflows[bot]"
           git config user.email "eas-workflows[bot]@users.noreply.github.com"
           git add posted.json
-          git diff --cached --quiet || git commit -m "Update posted.json state" && git push
+          git diff --cached --quiet || (git commit -m "Update posted.json state" && git push)
