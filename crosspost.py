@@ -778,13 +778,13 @@ def process_blog_post(post, posted_slugs, existing_urls):
     new_title, rewritten_markdown = rewrite_result
     log(f"  Rewritten: '{post['title']}' -> '{new_title}'")
 
-    # Publish as draft with no canonical URL (original content)
     result = publish_to_devto(
         title=new_title,
         markdown=rewritten_markdown,
         description=description,
         tags=tags,
         cover_image=cover_image,
+        canonical_url=post["link"],
         published=False,
     )
     if result:
@@ -833,13 +833,13 @@ def process_changelog(post, posted_slugs, existing_urls):
     new_title, rewritten_markdown = rewrite_result
     log(f"  Rewritten: '{post['title']}' -> '{new_title}'")
 
-    # Publish as draft with no canonical URL (original content)
     result = publish_to_devto(
         title=new_title,
         markdown=rewritten_markdown,
         description=description,
         tags=tags,
         cover_image=cover_image,
+        canonical_url=post["link"],
         published=False,
     )
     if result:
