@@ -1,0 +1,36 @@
+name: Cross-post Expo blog to Dev.to
+
+on:
+  schedule:
+    - cron: "0 19 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  crosspost:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic
+
+      - name: Run cross-post script
+        env:
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+          DEVTO_ORG_ID: ${{ secrets.DEVTO_ORG_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python crosspost.py
+
+      - name: Persist state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add posted.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update posted.json state"
+            git push
+          fi
