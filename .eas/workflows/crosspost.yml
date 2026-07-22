@@ -8,6 +8,7 @@ on:
 jobs:
   crosspost:
     runs_on: linux-medium
+    image: sdk-57
     environment: production
     steps:
       - uses: eas/checkout@v1
