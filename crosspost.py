@@ -5,6 +5,7 @@ Checks the expo.dev/blog RSS feed and changelog index, compares against
 published Dev.to articles, and publishes any new content.
 """
 
+import difflib
 import json
 import os
 import re
@@ -82,6 +83,13 @@ REWRITE_MODEL = "claude-sonnet-5"
 # rewrite. Values much above this risk an SDK HTTP timeout without streaming.
 REWRITE_MAX_TOKENS = 16000
 
+# A rewritten title at or above this similarity to the original counts as a
+# restatement and is rejected. 1.0 is an exact match after normalization.
+TITLE_MAX_SIMILARITY = 0.9
+
+# How many times to re-ask when the title comes back too close to the original.
+TITLE_RETRIES = 2
+
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -93,6 +101,30 @@ class FatalAPIError(Exception):
 
 class RewriteRejected(Exception):
     """A response arrived but is not usable. Retrying it would not help."""
+
+
+def normalize_title(text):
+    """Lowercase, drop punctuation, collapse whitespace, for comparison only."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", "", text.lower())).strip()
+
+
+def title_is_variation(original, candidate):
+    """True when candidate is a genuine variation of original, not a restatement.
+
+    A rewrite whose title matches the source defeats the point of the rewrite,
+    so this is enforced in code rather than left to the prompt. The comparison
+    is deliberately shallow: it catches reuse, punctuation-only edits, and
+    reordered words. Judging whether the angle really changed is the prompt's
+    job.
+    """
+    a, b = normalize_title(original), normalize_title(candidate)
+    if not b:
+        return False
+    if a == b:
+        return False
+    if a.split() and sorted(a.split()) == sorted(b.split()):
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() < TITLE_MAX_SIMILARITY
 
 
 def extract_rewritten_text(response):
@@ -590,8 +622,30 @@ talking to another engineer.
 Vary sentence length. Vary paragraph length. Don't start consecutive \
 paragraphs with transition words. Cut unnecessary elaboration.
 
+## Title (mandatory)
+
+The H1 must be a semantic variation of the original title, never the original \
+title reused or lightly edited. This is not optional: a draft whose title \
+matches the original is rejected and never published.
+
+Reusing the original title, reordering its words, or swapping one word for a \
+synonym all count as failures. Change the angle: lead with the reader's \
+problem instead of the feature, name the mechanism instead of the outcome, \
+state the payoff, or ask what the original asserts. Keep the same subject and \
+the same technical claim, and keep product names exact.
+
+Worked examples:
+
+- Original: "Faster iOS builds with precompiled XCFrameworks"
+  Good: "Cut your iOS build time by precompiling React Native from source"
+  Bad: "Faster iOS builds using precompiled XCFrameworks" (a synonym swap)
+- Original: "Introducing Observe: performance monitoring for Expo apps"
+  Good: "Find out which screen is slow before your users tell you"
+  Bad: "Announcing Observe: performance monitoring for Expo apps" (same shape)
+
 ## Self-check before output
 
+- H1 is a semantic variation of the original title, not a reuse of it
 - H1 is sentence case, contains the feature name, no clickbait
 - Problem statement appears within the first 2 paragraphs
 - Every named product/API has a link on first mention
@@ -606,8 +660,17 @@ or a company making an announcement? If the latter, rewrite.
 
 ## Output format
 
-Return ONLY the rewritten markdown. Start with a # title. No commentary, \
+Return ONLY the rewritten markdown. Start with a # title, which must be a \
+semantic variation of the original per the Title section above. No commentary, \
 no explanations, no metadata blocks outside the content.
+"""
+
+TITLE_CORRECTION = """\
+
+The previous attempt returned the title "{previous}", which is too close to the \
+original title "{original}". Produce a genuinely different title: change the \
+angle rather than the wording, per the Title section. Keep the body's technical \
+content and every __CODE_BLOCK_N__ placeholder intact.
 """
 
 
@@ -678,65 +741,89 @@ def rewrite_via_claude(markdown, title, description, source_url):
         anthropic.BadRequestError,
     )
 
-    last_error = None
-    rewritten_prose = None
-    for attempt in range(3):
-        try:
-            response = client.messages.create(
-                model=REWRITE_MODEL,
-                max_tokens=REWRITE_MAX_TOKENS,
-                system=system,
-                messages=[{"role": "user", "content": user_msg}],
+    def attempt(prompt):
+        """One rewrite round trip. Returns (new_title, body) or None."""
+        last_error = None
+        rewritten_prose = None
+        for attempt_num in range(3):
+            try:
+                response = client.messages.create(
+                    model=REWRITE_MODEL,
+                    max_tokens=REWRITE_MAX_TOKENS,
+                    system=system,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            except fatal_errors as e:
+                raise FatalAPIError(f"Claude API rejected the request: {e}") from e
+            except Exception as e:
+                last_error = e
+                log(f"  Claude API attempt {attempt_num + 1} failed: {e}")
+                if attempt_num < 2:
+                    time.sleep(2 ** (attempt_num + 1))
+                continue
+
+            # The request succeeded. Problems with the response itself are not
+            # retryable, so do not spend the remaining attempts on them.
+            usage = response.usage
+            log(
+                f"  Claude responded: stop_reason={response.stop_reason} "
+                f"in={usage.input_tokens} out={usage.output_tokens}"
             )
-        except fatal_errors as e:
-            raise FatalAPIError(f"Claude API rejected the request: {e}") from e
-        except Exception as e:
-            last_error = e
-            log(f"  Claude API attempt {attempt + 1} failed: {e}")
-            if attempt < 2:
-                time.sleep(2 ** (attempt + 1))
-            continue
+            try:
+                rewritten_prose = extract_rewritten_text(response)
+            except RewriteRejected as e:
+                log(f"  ERROR: {e}")
+                return None
+            break
 
-        # The request succeeded. Problems with the response itself are not
-        # retryable, so do not spend the remaining attempts on them.
-        usage = response.usage
-        log(
-            f"  Claude responded: stop_reason={response.stop_reason} "
-            f"in={usage.input_tokens} out={usage.output_tokens}"
-        )
-        try:
-            rewritten_prose = extract_rewritten_text(response)
-        except RewriteRejected as e:
-            log(f"  ERROR: {e}")
+        if rewritten_prose is None:
+            log(f"  Claude API failed after 3 attempts: {last_error}")
             return None
-        break
 
-    if rewritten_prose is None:
-        log(f"  Claude API failed after 3 attempts: {last_error}")
-        return None
+        # Reassemble code blocks
+        rewritten_full, success = reassemble_content(rewritten_prose, code_blocks)
+        if not success:
+            log("  ERROR: Code block placeholders were lost during rewrite, rejecting")
+            return None
 
-    # Reassemble code blocks
-    rewritten_full, success = reassemble_content(rewritten_prose, code_blocks)
-    if not success:
-        log("  ERROR: Code block placeholders were lost during rewrite, rejecting")
-        return None
+        # Reject a rewrite that lost or padded the content (keep 40-200%)
+        orig_len = len(markdown)
+        ratio = len(rewritten_full) / orig_len if orig_len > 0 else 0
+        if ratio < 0.4 or ratio > 2.0:
+            log(f"  ERROR: Rewrite length ratio {ratio:.1%} is outside bounds, rejecting")
+            return None
 
-    # Reject a rewrite that lost or padded the content (keep 40-200% of original)
-    orig_len = len(markdown)
-    new_len = len(rewritten_full)
-    ratio = new_len / orig_len if orig_len > 0 else 0
-    if ratio < 0.4 or ratio > 2.0:
-        log(f"  ERROR: Rewrite length ratio {ratio:.1%} is outside bounds, rejecting")
-        return None
+        # Extract the new title from the first H1. A missing H1 is a rejection:
+        # falling back to the original title would silently publish the very
+        # thing the title rule forbids.
+        title_match = re.match(r"^#\s+(.+)$", rewritten_full, re.MULTILINE)
+        if not title_match:
+            log("  ERROR: Rewrite has no H1 title, rejecting")
+            return None
+        new_title = title_match.group(1).strip()
+        # Remove the title line from the body (Dev.to adds title separately)
+        body = rewritten_full[title_match.end():].lstrip("\n")
+        return new_title, body
 
-    # Extract new title from the rewritten content (first # heading)
-    title_match = re.match(r"^#\s+(.+)$", rewritten_full, re.MULTILINE)
-    new_title = title_match.group(1).strip() if title_match else title
-    # Remove the title line from the body (Dev.to adds title separately)
-    if title_match:
-        rewritten_full = rewritten_full[title_match.end():].lstrip("\n")
+    prompt = user_msg
+    for round_num in range(TITLE_RETRIES + 1):
+        result = attempt(prompt)
+        if result is None:
+            return None
+        new_title, body = result
 
-    return new_title, rewritten_full
+        if title_is_variation(title, new_title):
+            return new_title, body
+
+        log(f"  Title too close to the original: {new_title!r}")
+        if round_num < TITLE_RETRIES:
+            log(f"  Re-asking for a different title ({round_num + 1}/{TITLE_RETRIES})")
+            prompt = user_msg + TITLE_CORRECTION.format(
+                previous=new_title, original=title
+            )
+
+    log("  ERROR: title still matched the original after retries, rejecting")
+    return None
 
 
 # ---------------------------------------------------------------------------
