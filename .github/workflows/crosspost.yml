@@ -52,6 +52,9 @@ jobs:
           DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
           DEVTO_ORG_ID: ${{ secrets.DEVTO_ORG_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Required only for identity-linked Anthropic keys, which reject
+          # requests that do not name a workspace.
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
           # Empty on a schedule event, so the script default of 5 applies.
           MAX_POSTS_PER_RUN: ${{ inputs.max_posts }}
         run: python crosspost.py
