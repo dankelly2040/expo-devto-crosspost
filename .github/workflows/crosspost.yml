@@ -3,7 +3,12 @@ name: Cross-post Expo blog to Dev.to
 on:
   schedule:
     - cron: "0 19 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      max_posts:
+        description: "Max drafts to create in this run"
+        required: false
+        default: "5"
 
 # The "Persist state" step pushes posted.json back to main. The repository
 # default is read-only, so the write permission must be granted here.
@@ -47,6 +52,8 @@ jobs:
           DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
           DEVTO_ORG_ID: ${{ secrets.DEVTO_ORG_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Empty on a schedule event, so the script default of 5 applies.
+          MAX_POSTS_PER_RUN: ${{ inputs.max_posts }}
         run: python crosspost.py
 
       # Runs even when the script fails, so slugs that were already posted are

@@ -89,6 +89,14 @@ days instead of flooding the Dev.to account in one go. Override with
 MAX_POSTS_PER_RUN=1 python3 crosspost.py
 ```
 
+For a manual workflow run, set the same limit with the `max_posts` input:
+
+```bash
+gh workflow run crosspost.yml -f max_posts=20
+```
+
+Scheduled runs always use the default of 5.
+
 ### Automated via local cron (alternative to GitHub Actions)
 
 `run.sh` is a wrapper script for cron. Add it to your crontab to run daily at noon PT:
@@ -109,3 +117,8 @@ a clean checkout each run, carries state between runs.
 Slugs are written sorted, and `--dry-run` never writes the file. If `posted.json`
 is deleted, the script still checks existing Dev.to articles by canonical URL
 before re-posting.
+
+The script has no publish-date filter. Coverage is controlled entirely by which
+slugs are recorded here. On 2026-08-31 the file was seeded with every blog post
+and changelog entry published before 2026-07-01, so cross-posting starts from a
+two-month window rather than the full expo.dev archive.
