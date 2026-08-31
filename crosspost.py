@@ -40,10 +40,24 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted.json")
 DRY_RUN = "--dry-run" in sys.argv
 
-# Cap drafts per run. The backlog is currently ~60 items; publishing them all in
-# one run would flood the Dev.to account and trip its article rate limit. The
-# remainder is picked up by the next scheduled run.
-MAX_POSTS_PER_RUN = int(os.environ.get("MAX_POSTS_PER_RUN", "5"))
+# Cap drafts per run, so a large backlog drains over several runs instead of
+# flooding the Dev.to account and tripping its article rate limit.
+# The workflow passes this through from a workflow_dispatch input, which is an
+# empty string on scheduled runs, so an unset or blank value must fall back to
+# the default rather than raising on int("").
+def _max_posts_per_run(default=5):
+    raw = os.environ.get("MAX_POSTS_PER_RUN", "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        log(f"WARNING: MAX_POSTS_PER_RUN={raw!r} is not an integer, using {default}")
+        return default
+    if value < 1:
+        log(f"WARNING: MAX_POSTS_PER_RUN={value} is below 1, using {default}")
+        return default
+    return value
 
 # Dev.to tag mapping (max 4 tags per post)
 TAG_MAP = {
@@ -950,12 +964,13 @@ def main():
 
     log(f"Found {len(new_blog_posts)} new blog post(s) and {len(new_changelogs)} new changelog(s)")
 
-    if len(all_new) > MAX_POSTS_PER_RUN:
+    max_posts = _max_posts_per_run()
+    if len(all_new) > max_posts:
         log(
-            f"Limiting this run to {MAX_POSTS_PER_RUN} item(s); "
-            f"{len(all_new) - MAX_POSTS_PER_RUN} deferred to the next run"
+            f"Limiting this run to {max_posts} item(s); "
+            f"{len(all_new) - max_posts} deferred to the next run"
         )
-        all_new = all_new[:MAX_POSTS_PER_RUN]
+        all_new = all_new[:max_posts]
 
     for post in all_new:
         slug = post["slug"]
