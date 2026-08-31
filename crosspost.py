@@ -77,6 +77,11 @@ CHANGELOG_TAGS = ["expo", "reactnative", "mobile", "javascript"]
 # Claude model used for the rewrite step. Model IDs carry no date suffix.
 REWRITE_MODEL = "claude-sonnet-5"
 
+# max_tokens caps thinking plus response text together, and this model runs
+# adaptive thinking by default, so leave headroom above the longest expected
+# rewrite. Values much above this risk an SDK HTTP timeout without streaming.
+REWRITE_MAX_TOKENS = 16000
+
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -84,6 +89,33 @@ def log(msg):
 
 class FatalAPIError(Exception):
     """An API error that will recur on every item, so the run should stop."""
+
+
+class RewriteRejected(Exception):
+    """A response arrived but is not usable. Retrying it would not help."""
+
+
+def extract_rewritten_text(response):
+    """Return the response's text, or raise RewriteRejected.
+
+    content[0] is not necessarily the text. This model runs adaptive thinking
+    by default, so the first block is normally a thinking block, and indexing
+    content[0].text raises AttributeError.
+    """
+    if response.stop_reason == "refusal":
+        raise RewriteRejected("the model declined to rewrite this post")
+
+    parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+    if not parts:
+        kinds = ", ".join(getattr(b, "type", "?") for b in response.content) or "none"
+        raise RewriteRejected(f"response carried no text block (blocks: {kinds})")
+
+    if response.stop_reason == "max_tokens":
+        raise RewriteRejected(
+            f"response hit max_tokens ({REWRITE_MAX_TOKENS}); the rewrite is truncated"
+        )
+
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -647,16 +679,15 @@ def rewrite_via_claude(markdown, title, description, source_url):
     )
 
     last_error = None
+    rewritten_prose = None
     for attempt in range(3):
         try:
             response = client.messages.create(
                 model=REWRITE_MODEL,
-                max_tokens=8192,
+                max_tokens=REWRITE_MAX_TOKENS,
                 system=system,
                 messages=[{"role": "user", "content": user_msg}],
             )
-            rewritten_prose = response.content[0].text
-            break
         except fatal_errors as e:
             raise FatalAPIError(f"Claude API rejected the request: {e}") from e
         except Exception as e:
@@ -664,7 +695,23 @@ def rewrite_via_claude(markdown, title, description, source_url):
             log(f"  Claude API attempt {attempt + 1} failed: {e}")
             if attempt < 2:
                 time.sleep(2 ** (attempt + 1))
-    else:
+            continue
+
+        # The request succeeded. Problems with the response itself are not
+        # retryable, so do not spend the remaining attempts on them.
+        usage = response.usage
+        log(
+            f"  Claude responded: stop_reason={response.stop_reason} "
+            f"in={usage.input_tokens} out={usage.output_tokens}"
+        )
+        try:
+            rewritten_prose = extract_rewritten_text(response)
+        except RewriteRejected as e:
+            log(f"  ERROR: {e}")
+            return None
+        break
+
+    if rewritten_prose is None:
         log(f"  Claude API failed after 3 attempts: {last_error}")
         return None
 
