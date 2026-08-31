@@ -50,7 +50,13 @@ The workflow requires these repository secrets. Without them the run fails at th
 | --- | --- | --- |
 | `DEVTO_API_KEY` | Yes | Dev.to API key, from dev.to/settings/extensions |
 | `ANTHROPIC_API_KEY` | Yes | Claude API key for the rewrite step |
+| `ANTHROPIC_WORKSPACE_ID` | Only for identity-linked keys | Workspace the request acts in |
 | `DEVTO_ORG_ID` | No | Publish under a Dev.to organization |
+
+An identity-linked Anthropic API key rejects any request that does not name a
+workspace, with `anthropic-workspace-id is required`. Set
+`ANTHROPIC_WORKSPACE_ID` to the workspace ID (`wrkspc_...`) in that case. A
+workspace-scoped key does not need it.
 
 ```bash
 gh secret set DEVTO_API_KEY -R dankelly2040/expo-devto-crosspost

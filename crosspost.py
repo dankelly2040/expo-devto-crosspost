@@ -37,6 +37,10 @@ if os.path.exists(_env_file):
 DEVTO_API_KEY = os.environ.get("DEVTO_API_KEY", "")
 DEVTO_ORG_ID = os.environ.get("DEVTO_ORG_ID", "")  # optional
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Identity-linked Anthropic API keys must name the workspace each request acts
+# in, via the anthropic-workspace-id header. Workspace-scoped keys do not, so
+# this stays optional and the header is only sent when a value is present.
+ANTHROPIC_WORKSPACE_ID = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted.json")
 DRY_RUN = "--dry-run" in sys.argv
 
@@ -75,7 +79,11 @@ REWRITE_MODEL = "claude-sonnet-5"
 
 
 def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+class FatalAPIError(Exception):
+    """An API error that will recur on every item, so the run should stop."""
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +631,21 @@ def rewrite_via_claude(markdown, title, description, source_url):
     )
 
     # Call Claude with retries
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    headers = {}
+    if ANTHROPIC_WORKSPACE_ID:
+        headers["anthropic-workspace-id"] = ANTHROPIC_WORKSPACE_ID
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, default_headers=headers)
+
+    # A bad key, a bad model name, or a malformed request fails identically on
+    # every retry. Raising aborts the whole run instead of burning three
+    # attempts per item across the entire backlog.
+    fatal_errors = (
+        anthropic.AuthenticationError,
+        anthropic.PermissionDeniedError,
+        anthropic.NotFoundError,
+        anthropic.BadRequestError,
+    )
+
     last_error = None
     for attempt in range(3):
         try:
@@ -635,6 +657,8 @@ def rewrite_via_claude(markdown, title, description, source_url):
             )
             rewritten_prose = response.content[0].text
             break
+        except fatal_errors as e:
+            raise FatalAPIError(f"Claude API rejected the request: {e}") from e
         except Exception as e:
             last_error = e
             log(f"  Claude API attempt {attempt + 1} failed: {e}")
@@ -972,22 +996,44 @@ def main():
         )
         all_new = all_new[:max_posts]
 
+    created = 0
+    failed = 0
+    fatal = None
     for post in all_new:
         slug = post["slug"]
-        if post.get("source") == "changelog":
-            success = process_changelog(post)
-        else:
-            success = process_blog_post(post)
+        try:
+            if post.get("source") == "changelog":
+                success = process_changelog(post)
+            else:
+                success = process_blog_post(post)
+        except FatalAPIError as e:
+            fatal = e
+            break
 
         if success:
+            created += 1
             posted_slugs.add(slug)
             # Save after every draft. A crash later in the loop must not lose
             # the record of drafts already created, or the next run duplicates
             # them.
             save_state({"posted_slugs": list(posted_slugs)})
+        else:
+            failed += 1
 
     save_state({"posted_slugs": list(posted_slugs)})
-    log("\nDone.")
+
+    log(f"\nDone. {created} draft(s) created, {failed} failed, {len(all_new)} attempted.")
+
+    if fatal:
+        log(f"FATAL: {fatal}")
+        log("Run aborted; remaining items were not attempted.")
+        sys.exit(1)
+
+    # A run that attempted work and created nothing is a failure, not a no-op.
+    # Without this the workflow reports success while silently doing nothing.
+    if created == 0:
+        log("ERROR: no drafts were created")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
