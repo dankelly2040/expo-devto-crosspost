@@ -10,11 +10,10 @@ import os
 import re
 import sys
 import time
-import html
 import urllib.request
 import urllib.error
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime
 
 # ---------------------------------------------------------------------------
 # Config
@@ -41,6 +40,11 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted.json")
 DRY_RUN = "--dry-run" in sys.argv
 
+# Cap drafts per run. The backlog is currently ~60 items; publishing them all in
+# one run would flood the Dev.to account and trip its article rate limit. The
+# remainder is picked up by the next scheduled run.
+MAX_POSTS_PER_RUN = int(os.environ.get("MAX_POSTS_PER_RUN", "5"))
+
 # Dev.to tag mapping (max 4 tags per post)
 TAG_MAP = {
     "React Native": "reactnative",
@@ -50,7 +54,10 @@ TAG_MAP = {
     "AI": "ai",
     "Security notices": "security",
 }
-DEFAULT_TAGS = ["reactnative", "mobile", "javascript", "expo"]
+CHANGELOG_TAGS = ["expo", "reactnative", "mobile", "javascript"]
+
+# Claude model used for the rewrite step. Model IDs carry no date suffix.
+REWRITE_MODEL = "claude-sonnet-5"
 
 
 def log(msg):
@@ -69,8 +76,16 @@ def load_state():
 
 
 def save_state(state):
+    if DRY_RUN:
+        return
+    # Slugs are sorted because they come from a set, whose iteration order
+    # varies between runs. Without this, posted.json is rewritten with the same
+    # contents in a new order on every run, producing a commit and push each
+    # day even when nothing was cross-posted.
+    state = dict(state, posted_slugs=sorted(state.get("posted_slugs", [])))
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
+        f.write("\n")
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +198,20 @@ def fetch_blog_content(slug):
 # Changelog content extraction
 # ---------------------------------------------------------------------------
 
+def unescape_rsc_chunk(chunk):
+    """Decode an RSC push() payload, which is the body of a JSON string literal.
+
+    json.loads is used rather than the "unicode_escape" codec, which decodes
+    bytes as latin-1 and mangles any non-ASCII character in the changelog text.
+    """
+    try:
+        return json.loads(f'"{chunk}"')
+    except json.JSONDecodeError:
+        # Malformed payload: fall back to the lossy decode rather than skipping
+        # the chunk entirely.
+        return chunk.encode("utf-8", "surrogatepass").decode("unicode_escape", "replace")
+
+
 def fetch_changelog_list():
     """Fetch the changelog index and return list of {title, slug, link, pub_date, authors}."""
     page_html = fetch_url(EXPO_CHANGELOG_BASE)
@@ -194,7 +223,7 @@ def fetch_changelog_list():
     for chunk in chunks:
         if "initialPosts" not in chunk:
             continue
-        unescaped = chunk.encode().decode("unicode_escape")
+        unescaped = unescape_rsc_chunk(chunk)
         idx = unescaped.find('"initialPosts"')
         if idx < 0:
             continue
@@ -236,7 +265,7 @@ def fetch_changelog_content(raw_slug):
     for chunk in chunks:
         if "changelogPost" not in chunk:
             continue
-        unescaped = chunk.encode().decode("unicode_escape")
+        unescaped = unescape_rsc_chunk(chunk)
         idx = unescaped.find('{"changelogPost"')
         if idx < 0:
             continue
@@ -585,7 +614,7 @@ def rewrite_via_claude(markdown, title, description, source_url):
     for attempt in range(3):
         try:
             response = client.messages.create(
-                model="claude-sonnet-4-6-20250627",
+                model=REWRITE_MODEL,
                 max_tokens=8192,
                 system=system,
                 messages=[{"role": "user", "content": user_msg}],
@@ -607,7 +636,7 @@ def rewrite_via_claude(markdown, title, description, source_url):
         log("  ERROR: Code block placeholders were lost during rewrite, rejecting")
         return None
 
-    # Validate length (60-150% of original)
+    # Reject a rewrite that lost or padded the content (keep 40-200% of original)
     orig_len = len(markdown)
     new_len = len(rewritten_full)
     ratio = new_len / orig_len if orig_len > 0 else 0
@@ -737,7 +766,7 @@ def publish_to_devto(title, markdown, description, tags, cover_image=None,
 # Main
 # ---------------------------------------------------------------------------
 
-def process_blog_post(post, posted_slugs, existing_urls):
+def process_blog_post(post):
     """Process, rewrite, and publish a single blog post. Returns True if published."""
     slug = post["slug"]
     log(f"\nProcessing blog: {post['title']}")
@@ -795,7 +824,7 @@ def process_blog_post(post, posted_slugs, existing_urls):
     return False
 
 
-def process_changelog(post, posted_slugs, existing_urls):
+def process_changelog(post):
     """Process, rewrite, and publish a single changelog entry. Returns True if published."""
     raw_slug = post["raw_slug"]
     log(f"\nProcessing changelog: {post['title']}")
@@ -811,7 +840,7 @@ def process_changelog(post, posted_slugs, existing_urls):
         log(f"  Skipping {raw_slug}: empty markdown conversion")
         return False
 
-    tags = ["expo", "reactnative", "mobile", "javascript"]
+    tags = list(CHANGELOG_TAGS)
 
     main_image = post_data.get("mainImage", {})
     cover_image = main_image.get("imageUrl") if isinstance(main_image, dict) else None
@@ -870,8 +899,14 @@ def main():
         existing_urls = set()
 
     # --- Blog posts ---
+    # The blog and changelog are fetched independently: a parsing or network
+    # failure on one source must not stop the other from being cross-posted.
     log("Fetching Expo blog RSS feed...")
-    rss_posts = fetch_rss_posts()
+    try:
+        rss_posts = fetch_rss_posts()
+    except Exception as e:
+        log(f"  ERROR fetching blog RSS feed: {e}")
+        rss_posts = []
     log(f"  Found {len(rss_posts)} blog posts in RSS feed")
 
     new_blog_posts = []
@@ -888,7 +923,11 @@ def main():
 
     # --- Changelogs ---
     log("Fetching Expo changelog index...")
-    changelog_posts = fetch_changelog_list()
+    try:
+        changelog_posts = fetch_changelog_list()
+    except Exception as e:
+        log(f"  ERROR fetching changelog index: {e}")
+        changelog_posts = []
     log(f"  Found {len(changelog_posts)} changelog entries")
 
     new_changelogs = []
@@ -911,17 +950,27 @@ def main():
 
     log(f"Found {len(new_blog_posts)} new blog post(s) and {len(new_changelogs)} new changelog(s)")
 
+    if len(all_new) > MAX_POSTS_PER_RUN:
+        log(
+            f"Limiting this run to {MAX_POSTS_PER_RUN} item(s); "
+            f"{len(all_new) - MAX_POSTS_PER_RUN} deferred to the next run"
+        )
+        all_new = all_new[:MAX_POSTS_PER_RUN]
+
     for post in all_new:
         slug = post["slug"]
         if post.get("source") == "changelog":
-            success = process_changelog(post, posted_slugs, existing_urls)
+            success = process_changelog(post)
         else:
-            success = process_blog_post(post, posted_slugs, existing_urls)
+            success = process_blog_post(post)
 
         if success:
             posted_slugs.add(slug)
+            # Save after every draft. A crash later in the loop must not lose
+            # the record of drafts already created, or the next run duplicates
+            # them.
+            save_state({"posted_slugs": list(posted_slugs)})
 
-    # Save state
     save_state({"posted_slugs": list(posted_slugs)})
     log("\nDone.")
 
