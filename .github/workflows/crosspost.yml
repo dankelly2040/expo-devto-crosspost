@@ -5,18 +5,42 @@ on:
     - cron: "0 19 * * *"
   workflow_dispatch: {}
 
+# The "Persist state" step pushes posted.json back to main. The repository
+# default is read-only, so the write permission must be granted here.
+permissions:
+  contents: write
+
+# A scheduled run and a manual run must not push posted.json at the same time.
+concurrency:
+  group: crosspost
+  cancel-in-progress: false
+
 jobs:
   crosspost:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
+      - name: Check required secrets
+        env:
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          missing=""
+          [ -n "$DEVTO_API_KEY" ] || missing="$missing DEVTO_API_KEY"
+          [ -n "$ANTHROPIC_API_KEY" ] || missing="$missing ANTHROPIC_API_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Add them with: gh secret set <NAME> -R ${{ github.repository }}"
+            exit 1
+          fi
+
       - name: Install dependencies
-        run: pip install anthropic
+        run: pip install "anthropic>=1.2,<2"
 
       - name: Run cross-post script
         env:
@@ -25,7 +49,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python crosspost.py
 
+      # Runs even when the script fails, so slugs that were already posted are
+      # recorded and do not get posted a second time on the next run.
       - name: Persist state
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

@@ -38,6 +38,32 @@ source .venv/bin/activate
 pip install anthropic
 ```
 
+## Automation (GitHub Actions)
+
+`.github/workflows/crosspost.yml` runs the script daily at 19:00 UTC, and can be
+triggered manually from the Actions tab.
+
+The workflow requires these repository secrets. Without them the run fails at the
+"Check required secrets" step:
+
+| Secret | Required | Purpose |
+| --- | --- | --- |
+| `DEVTO_API_KEY` | Yes | Dev.to API key, from dev.to/settings/extensions |
+| `ANTHROPIC_API_KEY` | Yes | Claude API key for the rewrite step |
+| `DEVTO_ORG_ID` | No | Publish under a Dev.to organization |
+
+```bash
+gh secret set DEVTO_API_KEY -R dankelly2040/expo-devto-crosspost
+gh secret set ANTHROPIC_API_KEY -R dankelly2040/expo-devto-crosspost
+gh secret set DEVTO_ORG_ID -R dankelly2040/expo-devto-crosspost   # optional
+```
+
+The workflow commits `posted.json` back to `main` after each run, so the job needs
+write access to repository contents. The workflow declares `permissions: contents:
+write` for this. If pushes still fail with a 403, the organization or repository
+setting "Workflow permissions" is set to read-only for all workflows and must be
+changed in Settings > Actions > General.
+
 ## Usage
 
 ### Manual run
@@ -53,7 +79,17 @@ python3 crosspost.py
 python3 crosspost.py --dry-run
 ```
 
-### Automated via cron
+### Limiting drafts per run
+
+Each run creates at most 5 drafts, so a large backlog is drained over several
+days instead of flooding the Dev.to account in one go. Override with
+`MAX_POSTS_PER_RUN`:
+
+```bash
+MAX_POSTS_PER_RUN=1 python3 crosspost.py
+```
+
+### Automated via local cron (alternative to GitHub Actions)
 
 `run.sh` is a wrapper script for cron. Add it to your crontab to run daily at noon PT:
 
@@ -66,4 +102,10 @@ Logs are written to `crosspost.log` in the project directory.
 
 ## State tracking
 
-`posted.json` tracks which slugs have been processed to avoid duplicates. This file is gitignored. If deleted, the script will also check existing Dev.to articles by canonical URL before re-posting.
+`posted.json` tracks which slugs have been processed to avoid duplicates. It is
+committed to the repository so that the GitHub Actions runner, which starts from
+a clean checkout each run, carries state between runs.
+
+Slugs are written sorted, and `--dry-run` never writes the file. If `posted.json`
+is deleted, the script still checks existing Dev.to articles by canonical URL
+before re-posting.
