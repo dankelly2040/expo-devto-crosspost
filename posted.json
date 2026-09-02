@@ -1,6 +1,7 @@
 {
   "posted_slugs": [
     "5-proven-strategies-to-increase-adoption-of-your-b2b-mobile-app",
+    "a-hell-of-a-time-to-be-a-builder",
     "app-store-connect-minimum-sdk-26",
     "app-variants-side-by-side",
     "aso-skills-aso-in-your-ai-workflow",
@@ -10,6 +11,7 @@
     "build-fast-no-matter-what-how-expo-is-optimizing-for-speed",
     "building-a-native-first-social-platform-with-expo",
     "changelog-compiler-cache-for-builds",
+    "changelog-connect-expo-in-claude",
     "changelog-eas-internal-ios-ci-workflows",
     "changelog-expanded-permissions-for-the-expo-github-bot",
     "changelog-expo-go-and-app-store-may-2026",
@@ -36,6 +38,7 @@
     "from-istanbul-to-1-in-the-us-app-store-why-feraset-bet-its-ai-app-studio-on-expo",
     "from-react-web-to-native-in-one-week",
     "how-a-kotlin-compiler-plugin-cut-android-time-to-first-render",
+    "how-add-in-store-card-payments-to-a-pos-app",
     "how-fieldy-adopted-expo-for-their-ai-wearable",
     "how-fig-keeps-millions-eating-safely-with-a-five-engineer-team-and-expo",
     "how-hipcamp-upgraded-expo-sdk-versions-with-claude-code",
@@ -51,6 +54,7 @@
     "ios-widgets-and-live-activities-in-expo",
     "moving-away-from-expo-vector-icons",
     "native-code-expo-sdk-56",
+    "nesting-tabs-and-drawers-with-expo",
     "pasting-images-into-textinput-should-not-be-this-hard",
     "posh-manual-weekly-releases-to-continuous-delivery-with-expo",
     "seth-webster-joined-expo",
