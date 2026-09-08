@@ -124,6 +124,18 @@ Slugs are written sorted, and `--dry-run` never writes the file. If `posted.json
 is deleted, the script still checks existing Dev.to articles by canonical URL
 before re-posting.
 
+The file also carries a `failures` map of slug to failed-attempt count. An item
+that fails three times in a row is dropped from the queue and logged as
+"Giving up", so one bad entry cannot make every daily run exit non-zero. The
+count is cleared when the item succeeds, and the key is omitted when empty. To
+retry a dropped item, delete its entry from `failures`.
+
+Rewrites are length-checked. A result below 40% of the source is rejected as
+lost content. A source of 4000 characters or more is rejected above 200% of its
+length. A shorter source (most changelog entries) is instead capped at 8000
+characters, because the prompt asks for a post of a few hundred words and a
+600-character changelog entry legitimately grows several times over.
+
 The script has no publish-date filter. Coverage is controlled entirely by which
 slugs are recorded here. On 2026-08-31 the file was seeded with every blog post
 and changelog entry published before 2026-07-01, so cross-posting starts from a

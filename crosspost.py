@@ -6,6 +6,7 @@ published Dev.to articles, and publishes any new content.
 """
 
 import difflib
+import html
 import json
 import os
 import re
@@ -90,6 +91,22 @@ TITLE_MAX_SIMILARITY = 0.9
 # How many times to re-ask when the title comes back too close to the original.
 TITLE_RETRIES = 2
 
+# Length guard for the rewrite. A result shorter than REWRITE_MIN_RATIO of the
+# source lost content. The upper bound depends on the source length: the prompt
+# asks for a post of a few hundred words, so a short source (most changelog
+# entries are 600-1700 characters) legitimately grows several times over. A
+# source below REWRITE_SHORT_SOURCE_CHARS is therefore checked against the
+# absolute cap REWRITE_MAX_CHARS instead of REWRITE_MAX_RATIO.
+REWRITE_MIN_RATIO = 0.4
+REWRITE_MAX_RATIO = 2.0
+REWRITE_SHORT_SOURCE_CHARS = 4000
+REWRITE_MAX_CHARS = 8000
+
+# An item that fails this many times across runs is dropped from the queue.
+# Without this, one permanently failing entry is retried every day, burns a
+# Claude call each time, and makes a run with no other work exit non-zero.
+MAX_ITEM_FAILURES = 3
+
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -169,6 +186,9 @@ def save_state(state):
     # contents in a new order on every run, producing a commit and push each
     # day even when nothing was cross-posted.
     state = dict(state, posted_slugs=sorted(state.get("posted_slugs", [])))
+    failures = state.pop("failures", None) or {}
+    if failures:
+        state["failures"] = dict(sorted(failures.items()))
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
         f.write("\n")
@@ -340,6 +360,14 @@ def fetch_changelog_list():
     return []
 
 
+def extract_og_image(page_html):
+    """Return the page's og:image URL, or None when the tag is absent."""
+    match = re.search(
+        r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', page_html
+    )
+    return html.unescape(match.group(1)) if match else None
+
+
 def fetch_changelog_content(raw_slug):
     """Fetch a changelog post page and extract the Portable Text body from RSC data."""
     url = f"{EXPO_CHANGELOG_BASE}/{raw_slug}"
@@ -357,7 +385,12 @@ def fetch_changelog_content(raw_slug):
             continue
         decoder = json.JSONDecoder()
         data, _ = decoder.raw_decode(unescaped[idx:])
-        return data.get("changelogPost")
+        post = data.get("changelogPost")
+        if isinstance(post, dict):
+            # Most changelog entries have no mainImage in Sanity. The generated
+            # og:image on the page is the only cover available for them.
+            post["ogImageUrl"] = extract_og_image(page_html)
+        return post
 
     return None
 
@@ -537,6 +570,11 @@ sections each a principle with examples, closing with next step.
 
 - **Bug fix or perf note** (400-700 words): Tight, no marketing intro. What \
 broke, what we did, what changed.
+
+- **Changelog entry** (250-500 words): A short product update, usually under \
+300 words in the source. Structure: the news in one line, what changes for \
+the reader, how to use or enable it, link to the docs. Do not add features, \
+numbers, or claims that are not in the source. A short source gets a short post.
 
 Pick the right structure. Don't pad to hit a length target.
 
@@ -786,11 +824,29 @@ def rewrite_via_claude(markdown, title, description, source_url):
             log("  ERROR: Code block placeholders were lost during rewrite, rejecting")
             return None
 
-        # Reject a rewrite that lost or padded the content (keep 40-200%)
+        # Reject a rewrite that lost or padded the content. See the
+        # REWRITE_* constants for why short sources get an absolute cap.
         orig_len = len(markdown)
-        ratio = len(rewritten_full) / orig_len if orig_len > 0 else 0
-        if ratio < 0.4 or ratio > 2.0:
-            log(f"  ERROR: Rewrite length ratio {ratio:.1%} is outside bounds, rejecting")
+        new_len = len(rewritten_full)
+        ratio = new_len / orig_len if orig_len > 0 else 0
+        if ratio < REWRITE_MIN_RATIO:
+            log(
+                f"  ERROR: Rewrite length ratio {ratio:.1%} is below "
+                f"{REWRITE_MIN_RATIO:.0%}, rejecting"
+            )
+            return None
+        if orig_len < REWRITE_SHORT_SOURCE_CHARS:
+            if new_len > REWRITE_MAX_CHARS:
+                log(
+                    f"  ERROR: Rewrite is {new_len} chars, above the "
+                    f"{REWRITE_MAX_CHARS} char cap for short sources, rejecting"
+                )
+                return None
+        elif ratio > REWRITE_MAX_RATIO:
+            log(
+                f"  ERROR: Rewrite length ratio {ratio:.1%} is above "
+                f"{REWRITE_MAX_RATIO:.0%}, rejecting"
+            )
             return None
 
         # Extract the new title from the first H1. A missing H1 is a rejection:
@@ -906,8 +962,11 @@ def publish_to_devto(title, markdown, description, tags, cover_image=None,
     if canonical_url:
         article_data["article"]["canonical_url"] = canonical_url
 
+    # The create endpoint takes main_image. cover_image is the name of the
+    # same field in API responses only; sending it is silently ignored and the
+    # draft ends up with no cover.
     if cover_image:
-        article_data["article"]["cover_image"] = cover_image
+        article_data["article"]["main_image"] = cover_image
 
     if DEVTO_ORG_ID:
         article_data["article"]["organization_id"] = int(DEVTO_ORG_ID)
@@ -1016,6 +1075,8 @@ def process_changelog(post):
 
     main_image = post_data.get("mainImage", {})
     cover_image = main_image.get("imageUrl") if isinstance(main_image, dict) else None
+    if not cover_image:
+        cover_image = post_data.get("ogImageUrl")
 
     description = post_data.get("metadataDescription", "")
 
@@ -1061,6 +1122,10 @@ def main():
     # Load state
     state = load_state()
     posted_slugs = set(state.get("posted_slugs", []))
+    failures = dict(state.get("failures", {}))
+
+    def current_state():
+        return {"posted_slugs": list(posted_slugs), "failures": failures}
 
     # Check what's already on Dev.to
     if not DRY_RUN:
@@ -1115,12 +1180,23 @@ def main():
 
     # --- Combine and process ---
     all_new = new_blog_posts + new_changelogs
+
+    still_new = []
+    for post in all_new:
+        count = failures.get(post["slug"], 0)
+        if count >= MAX_ITEM_FAILURES:
+            log(f"Giving up on {post['slug']}: failed {count} times")
+        else:
+            still_new.append(post)
+    all_new = still_new
+
     if not all_new:
         log("No new content to cross-post.")
-        save_state({"posted_slugs": list(posted_slugs)})
+        save_state(current_state())
         return
 
-    log(f"Found {len(new_blog_posts)} new blog post(s) and {len(new_changelogs)} new changelog(s)")
+    blog_count = sum(1 for p in all_new if p.get("source") == "blog")
+    log(f"Found {blog_count} new blog post(s) and {len(all_new) - blog_count} new changelog(s)")
 
     max_posts = _max_posts_per_run()
     if len(all_new) > max_posts:
@@ -1147,14 +1223,16 @@ def main():
         if success:
             created += 1
             posted_slugs.add(slug)
+            failures.pop(slug, None)
             # Save after every draft. A crash later in the loop must not lose
             # the record of drafts already created, or the next run duplicates
             # them.
-            save_state({"posted_slugs": list(posted_slugs)})
+            save_state(current_state())
         else:
             failed += 1
+            failures[slug] = failures.get(slug, 0) + 1
 
-    save_state({"posted_slugs": list(posted_slugs)})
+    save_state(current_state())
 
     log(f"\nDone. {created} draft(s) created, {failed} failed, {len(all_new)} attempted.")
 
