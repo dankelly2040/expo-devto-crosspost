@@ -114,6 +114,15 @@ Scheduled runs always use the default of 5.
 
 Logs are written to `crosspost.log` in the project directory.
 
+## Backfilling cover images
+
+Drafts created between 2026-07-01 and 2026-09-08 were posted with the cover in
+the wrong API field, so they have none. `backfill_covers.py` resolves the cover
+from each article's canonical expo.dev page and sets it with the Dev.to update
+endpoint. Run it from the "Backfill Dev.to cover images" workflow, which is
+manual only. It is a dry run unless the `apply` input is checked, and it skips
+published articles unless `include_published` is checked.
+
 ## State tracking
 
 `posted.json` tracks which slugs have been processed to avoid duplicates. It is
