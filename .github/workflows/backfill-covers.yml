@@ -1,0 +1,38 @@
+name: Backfill Dev.to cover images
+
+# One-off maintenance job. Runs only when dispatched by hand. Dry run unless
+# the apply input is set.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write changes to Dev.to (unchecked = dry run)"
+        type: boolean
+        default: false
+      include_published:
+        description: "Also update published articles, not only drafts"
+        type: boolean
+        default: false
+
+concurrency:
+  group: crosspost
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Backfill covers
+        env:
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+        run: |
+          args=""
+          [ "${{ inputs.apply }}" = "true" ] && args="$args --apply"
+          [ "${{ inputs.include_published }}" = "true" ] && args="$args --include-published"
+          python backfill_covers.py $args
