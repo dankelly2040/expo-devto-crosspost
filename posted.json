@@ -33,6 +33,7 @@
     "changelog-sdk-56",
     "changelog-sdk-56-beta",
     "changelog-sdk-57",
+    "changelog-sdk-58-beta",
     "changelog-sign-in-with-github",
     "changelog-sign-in-with-passkeys",
     "changelog-the-expo-mcp-server-is-now-available-on-the-free-plan",
@@ -74,6 +75,7 @@
     "the-real-cost-of-react-native-animations-benchmarking-every-approach",
     "upgrading-to-sdk-56",
     "what-expo-s-series-b-funding-means-for-you",
+    "why-expo-is-a-great-fit-for-new-and-existing-react-native-apps",
     "worklet-integration-in-expo-ui-synchronously-controlling-swiftui-and-compose-state",
     "you-built-an-app-now-help-the-world-s-best-mobile-teams-build-theirs"
   ]
