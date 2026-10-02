@@ -81,5 +81,8 @@
     "why-expo-is-a-great-fit-for-new-and-existing-react-native-apps",
     "worklet-integration-in-expo-ui-synchronously-controlling-swiftui-and-compose-state",
     "you-built-an-app-now-help-the-world-s-best-mobile-teams-build-theirs"
-  ]
+  ],
+  "failures": {
+    "you-automated-your-build-your-growth-is-still-manual": 1
+  }
 }
