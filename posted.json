@@ -86,5 +86,8 @@
     "you-automated-your-build-your-growth-is-still-manual",
     "you-built-an-app-now-help-the-world-s-best-mobile-teams-build-theirs",
     "your-skills-need-an-evaluation-mechanism"
-  ]
+  ],
+  "failures": {
+    "changelog-sdk-58": 1
+  }
 }
