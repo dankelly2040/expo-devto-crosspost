@@ -79,6 +79,7 @@
     "pasting-images-into-textinput-should-not-be-this-hard",
     "posh-manual-weekly-releases-to-continuous-delivery-with-expo",
     "purrkour-webgpu-typegpu-game-expo-three-days",
+    "samio-learning-solo-developer-expo-case-study",
     "seth-webster-joined-expo",
     "shipping-a-performance-first-video-feed-how-tendbble-built-a-real-time-social-app-with-expo",
     "supporting-iphone-duo",
@@ -96,7 +97,6 @@
     "your-skills-need-an-evaluation-mechanism"
   ],
   "failures": {
-    "changelog-sdk-58": 3,
-    "samio-learning-solo-developer-expo-case-study": 1
+    "changelog-sdk-58": 3
   }
 }
